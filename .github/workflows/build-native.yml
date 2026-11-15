@@ -19,14 +19,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Collect the dropdown widget code for debugging
-        continue-on-error: true
-        run: |
-          mkdir -p logs/widgets
-          for f in $(grep -rl "fn editable_combo" crates/ui-egui/src); do
-            cp "$f" "logs/widgets/$(echo "$f" | tr '/' '_')"
-          done
-
       - name: Teach the app where the iPad keeps its fonts
         run: |
           mkdir -p logs
@@ -56,7 +48,6 @@ jobs:
               ('add(format!("{mac_sup}/{arial_mac}"), 0);',
                'add(format!("{mac_sup}/{arial_mac}"), 0);\n            add(format!("{mac_sys}/HelveticaNeue.ttc"), match role { "cell" => 0, "cell-bold" => 1, "cell-italic" => 2, _ => 3 });'),
           ])
-          # The ribbon's Font name dropdown shows every installed font, like Format Cells does.
           patch("crates/ui-egui/src/ribbon/home.rs", [
               ('let items: Vec<(&str, String)> = FONTS.iter().map(|f| (*f, f.to_string())).collect();',
                'let families = crate::fonts::families();\n    let items: Vec<(&str, String)> = families.iter().map(|f| (f.as_str(), f.clone())).collect();'),
@@ -74,6 +65,90 @@ jobs:
           NATIVE=$(grep -o 'native-static-libs:.*' logs/rust-build.log | head -1 | sed 's/native-static-libs: //')
           echo "System libraries: $NATIVE"
           echo "NATIVE_LIBS=$NATIVE" >> "$GITHUB_ENV"
+
+      - name: Make the app icon
+        run: |
+          ICONSET=ios/App/Assets.xcassets/AppIcon.appiconset
+          mkdir -p "$ICONSET"
+          cat > ios/App/Assets.xcassets/Contents.json <<'JSONEOF'
+          {"info":{"author":"xcode","version":1}}
+          JSONEOF
+          cat > "$ICONSET/Contents.json" <<'JSONEOF'
+          {"images":[{"filename":"AppIcon-1024.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}
+          JSONEOF
+          cat > /tmp/make-icon.swift <<'SWIFTEOF'
+          import Foundation
+          import CoreGraphics
+          import ImageIO
+
+          // usage: swift make-icon.swift <input.png | none> <output.png> [plain]
+          let args = CommandLine.arguments
+          let outPath = args[2]
+          let plain = args.count > 3 && args[3] == "plain"
+          let size = 1024
+          let space = CGColorSpace(name: CGColorSpace.sRGB)!
+          guard let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { exit(1) }
+
+          func readImage(_ path: String) -> CGImage? {
+              guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+              return CGImageSourceCreateImageAtIndex(src, 0, nil)
+          }
+
+          // The colour of one spot of the picture (fractions from the left and from the top).
+          func sample(_ img: CGImage, _ fx: Double, _ fy: Double) -> (Double, Double, Double) {
+              let one = CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+              let w = Double(img.width), h = Double(img.height)
+              one.draw(img, in: CGRect(x: -fx * w, y: -(1 - fy) * h, width: w, height: h))
+              let p = one.data!.assumingMemoryBound(to: UInt8.self)
+              let a = max(Double(p[3]) / 255, 0.001)
+              return (min(Double(p[0]) / 255 / a, 1), min(Double(p[1]) / 255 / a, 1), min(Double(p[2]) / 255 / a, 1))
+          }
+
+          if args[1] != "none", let img = readImage(args[1]) {
+              // A desktop icon has transparent margins and rounded corners; iOS rounds the icon
+              // itself, so the picture is enlarged a little over a background of its own edge colour.
+              let bg = plain ? (1.0, 1.0, 1.0) : sample(img, 0.5, 0.14)
+              ctx.setFillColor(red: bg.0, green: bg.1, blue: bg.2, alpha: 1)
+              ctx.fill(CGRect(x: 0, y: 0, width: size, height: size))
+              let scale = plain ? 1.0 : 1.24
+              let side = Double(size) * scale
+              let offset = -(side - Double(size)) / 2
+              ctx.interpolationQuality = .high
+              ctx.draw(img, in: CGRect(x: offset, y: offset, width: side, height: side))
+          } else {
+              ctx.setFillColor(red: 0.12, green: 0.62, blue: 0.33, alpha: 1)
+              ctx.fill(CGRect(x: 0, y: 0, width: size, height: size))
+              ctx.setStrokeColor(red: 1, green: 1, blue: 1, alpha: 1)
+              ctx.setLineWidth(40)
+              let m = 230.0
+              let s = Double(size) - 2 * m
+              ctx.stroke(CGRect(x: m, y: m, width: s, height: s))
+              for i in 1...2 {
+                  let t = m + s * Double(i) / 3
+                  ctx.move(to: CGPoint(x: t, y: m))
+                  ctx.addLine(to: CGPoint(x: t, y: m + s))
+                  ctx.move(to: CGPoint(x: m, y: t))
+                  ctx.addLine(to: CGPoint(x: m + s, y: t))
+              }
+              ctx.strokePath()
+          }
+
+          guard let result = ctx.makeImage(),
+                let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: outPath) as CFURL, "public.png" as CFString, 1, nil) else { exit(1) }
+          CGImageDestinationAddImage(dest, result, nil)
+          if !CGImageDestinationFinalize(dest) { exit(1) }
+          SWIFTEOF
+          if [ -f ios/AppIcon.png ]; then
+            echo "Using your own icon: ios/AppIcon.png"
+            swift /tmp/make-icon.swift ios/AppIcon.png "$ICONSET/AppIcon-1024.png" plain
+          elif [ -f assets/app-icon/gridcraft-macos-512.png ]; then
+            echo "Using the official icon from the repo"
+            swift /tmp/make-icon.swift assets/app-icon/gridcraft-macos-512.png "$ICONSET/AppIcon-1024.png"
+          else
+            echo "No icon picture found: using the plain fallback"
+            swift /tmp/make-icon.swift none "$ICONSET/AppIcon-1024.png"
+          fi
+          ls -la "$ICONSET"
 
       - name: Install XcodeGen
         run: brew install xcodegen
