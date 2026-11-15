@@ -38,11 +38,13 @@ enum SystemFonts {
                     skipped += 1
                     continue
                 }
-                guard let cg = CTFontCopyGraphicsFont(ct, nil), let tags = tableTags(of: cg) else {
+                // FIX: CTFontCopyGraphicsFont returns a non-optional CGFont in the current SDK.
+                let cg = CTFontCopyGraphicsFont(ct, nil)
+                guard let tags = tableTags(of: cg) else {
                     failed += 1
                     continue
                 }
-                let isCFF = tags.contains(0x43464620) || tags.contains(0x43464632)   // 'CFF ' or 'CFF2'
+                let isCFF = tags.contains(0x43464620) || tags.contains(0x43464632) // 'CFF ' or 'CFF2'
                 let safe = postScript.replacingOccurrences(of: "/", with: "_")
                 let fileName = safe + (isCFF ? ".otf" : ".ttf")
                 wanted.insert(fileName)
@@ -101,7 +103,7 @@ enum SystemFonts {
             out.append(contentsOf: [UInt8((v >> 8) & 0xFF), UInt8(v & 0xFF)])
         }
 
-        u32(isCFF ? 0x4F54544F : 0x00010000)   // 'OTTO' or TrueType
+        u32(isCFF ? 0x4F54544F : 0x00010000) // 'OTTO' or TrueType
         u16(n); u16(searchRange); u16(log); u16(rangeShift)
 
         var offset = 12 + 16 * n
