@@ -19,12 +19,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Collect the ribbon font dropdown code for debugging
+      - name: Collect the dropdown widget code for debugging
         continue-on-error: true
         run: |
-          mkdir -p logs
-          cp crates/ui-egui/src/ribbon/home.rs logs/ribbon-home.rs || true
-          grep -rn "FONT_NAMES\|font_names\|FONTS" crates/ui-egui/src/ribbon > logs/grep-ribbon-fonts.txt || true
+          mkdir -p logs/widgets
+          for f in $(grep -rl "fn editable_combo" crates/ui-egui/src); do
+            cp "$f" "logs/widgets/$(echo "$f" | tr '/' '_')"
+          done
 
       - name: Teach the app where the iPad keeps its fonts
         run: |
@@ -54,6 +55,11 @@ jobs:
                'let mac_sup = if cfg!(target_os = "ios") { "/System/Library/Fonts/CoreAddition" } else { "/System/Library/Fonts/Supplemental" };'),
               ('add(format!("{mac_sup}/{arial_mac}"), 0);',
                'add(format!("{mac_sup}/{arial_mac}"), 0);\n            add(format!("{mac_sys}/HelveticaNeue.ttc"), match role { "cell" => 0, "cell-bold" => 1, "cell-italic" => 2, _ => 3 });'),
+          ])
+          # The ribbon's Font name dropdown shows every installed font, like Format Cells does.
+          patch("crates/ui-egui/src/ribbon/home.rs", [
+              ('let items: Vec<(&str, String)> = FONTS.iter().map(|f| (*f, f.to_string())).collect();',
+               'let families = crate::fonts::families();\n    let items: Vec<(&str, String)> = families.iter().map(|f| (f.as_str(), f.clone())).collect();'),
           ])
           pathlib.Path("logs/font-patch-result.txt").write_text("\n".join(report) + "\n")
           PYEOF
