@@ -1,5 +1,9 @@
 import SwiftUI
 
+extension Notification.Name {
+    static let gcAddFonts = Notification.Name("GridCraftAddFonts")
+}
+
 @main
 struct GridCraftApp: App {
     init() {
@@ -14,6 +18,14 @@ struct GridCraftApp: App {
                 GridCraftHost()
             }
             .statusBarHidden(true)
+        }
+        .commands {
+            CommandMenu("Fonts") {
+                Button("Add Installed Fonts…") {
+                    NotificationCenter.default.post(name: .gcAddFonts, object: nil)
+                }
+                .keyboardShortcut("f", modifiers: [.command, .option, .shift])
+            }
         }
     }
 }
