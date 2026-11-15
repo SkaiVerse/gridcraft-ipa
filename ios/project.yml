@@ -10,7 +10,7 @@ targets:
       - path: App
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.justinfor.gridcraft
+        PRODUCT_BUNDLE_IDENTIFIER: com.yourname.gridcraft
         TARGETED_DEVICE_FAMILY: "2"
         SWIFT_VERSION: "5.0"
         MARKETING_VERSION: "0.1"
@@ -19,6 +19,7 @@ targets:
         LIBRARY_SEARCH_PATHS: "$(SRCROOT)/rust-lib"
         OTHER_LDFLAGS: "-lgridcraft_ios $(NATIVE_LIBS)"
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: App/Info.plist
       properties:
