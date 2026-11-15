@@ -21,42 +21,57 @@ enum SystemFonts {
         let started = Date()
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
+        // Every font name, from two sources: UIKit's list and CoreText's own list.
+        var names: [String] = []
+        var seen = Set<String>()
+        for family in UIFont.familyNames {
+            for n in UIFont.fontNames(forFamilyName: family) where seen.insert(n).inserted { names.append(n) }
+        }
+        let fromUIKit = names.count
+        if let all = CTFontManagerCopyAvailablePostScriptNames() as? [String] {
+            for n in all where seen.insert(n).inserted { names.append(n) }
+        }
+        let fromCoreTextOnly = names.count - fromUIKit
+
         var wanted = Set<String>()
-        var exported = 0, cached = 0, skipped = 0, failed = 0
+        var exported = 0, cached = 0, skipped = 0, failed = 0, noLocation = 0
+        var samples: [String] = []
         var finished = true
 
-        outer: for family in UIFont.familyNames {
-            for postScript in UIFont.fontNames(forFamilyName: family) {
-                if Date().timeIntervalSince(started) > budget {
-                    finished = false
-                    break outer
-                }
-                let ct = CTFontCreateWithName(postScript as CFString, 12, nil)
-                // Apple's own folder is read directly by GridCraft.
-                if let url = CTFontCopyAttribute(ct, kCTFontURLAttribute) as? URL,
-                   url.path.hasPrefix("/System/Library/Fonts") {
+        for postScript in names {
+            if Date().timeIntervalSince(started) > budget {
+                finished = false
+                break
+            }
+            let ct = CTFontCreateWithName(postScript as CFString, 12, nil)
+            // Apple's own folder is read directly by GridCraft.
+            if let url = CTFontCopyAttribute(ct, kCTFontURLAttribute) as? URL {
+                if url.path.hasPrefix("/System/Library/Fonts") {
                     skipped += 1
                     continue
                 }
-                let cg: CGFont = CTFontCopyGraphicsFont(ct, nil)
-                guard let tags = tableTags(of: cg) else {
-                    failed += 1
-                    continue
-                }
-                let isCFF = tags.contains(0x43464620) || tags.contains(0x43464632)   // 'CFF ' or 'CFF2'
-                let safe = postScript.replacingOccurrences(of: "/", with: "_")
-                let fileName = safe + (isCFF ? ".otf" : ".ttf")
-                wanted.insert(fileName)
-                let target = folder.appendingPathComponent(fileName)
-                if FileManager.default.fileExists(atPath: target.path) {
-                    cached += 1
-                    continue
-                }
-                if let data = sfnt(from: cg, tags: tags, isCFF: isCFF), (try? data.write(to: target)) != nil {
-                    exported += 1
-                } else {
-                    failed += 1
-                }
+                if samples.count < 8 { samples.append("\(postScript) at \(url.deletingLastPathComponent().path)") }
+            } else {
+                noLocation += 1
+            }
+            let cg: CGFont = CTFontCopyGraphicsFont(ct, nil)
+            guard let tags = tableTags(of: cg) else {
+                failed += 1
+                continue
+            }
+            let isCFF = tags.contains(0x43464620) || tags.contains(0x43464632)   // 'CFF ' or 'CFF2'
+            let safe = postScript.replacingOccurrences(of: "/", with: "_")
+            let fileName = safe + (isCFF ? ".otf" : ".ttf")
+            wanted.insert(fileName)
+            let target = folder.appendingPathComponent(fileName)
+            if FileManager.default.fileExists(atPath: target.path) {
+                cached += 1
+                continue
+            }
+            if let data = sfnt(from: cg, tags: tags, isCFF: isCFF), (try? data.write(to: target)) != nil {
+                exported += 1
+            } else {
+                failed += 1
             }
         }
 
@@ -66,7 +81,8 @@ enum SystemFonts {
                 try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
             }
         }
-        gcLog("system fonts: \(exported) copied, \(cached) already cached, \(skipped) in Apple's folder, \(failed) failed, complete: \(finished)")
+        gcLog("system fonts: names from UIKit \(fromUIKit), extra from CoreText \(fromCoreTextOnly); \(exported) copied, \(cached) already cached, \(skipped) in Apple's folder, \(noLocation) without a location, \(failed) failed, complete: \(finished)")
+        for s in samples { gcLog("system fonts sample: \(s)") }
     }
 
     /// The table tags of a font (like "head", "glyf", "CFF "), sorted.
