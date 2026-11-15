@@ -2,17 +2,26 @@ import UIKit
 import CoreText
 import CoreGraphics
 
-/// Makes every font the iPad offers visible to GridCraft, including the ones installed from
-/// Settings > General > Fonts, by font apps and by profiles. iPadOS keeps those files outside the
-/// app's reach but shows them through CoreText; each one is rebuilt from its font tables into a
-/// plain font file in the app's cache, which GridCraft scans along with its other font folders.
-/// Fonts in Apple's own folder are skipped, because GridCraft reads those directly.
+/// Makes the iPad's fonts visible to GridCraft.
+///
+/// 1. `prepare()` rebuilds every font that iPadOS lists but keeps outside Apple's font folder
+///    into a plain font file in the app's cache (GridCraft scans that cache).
+/// 2. `addPicked(_:)` does the same for fonts the person chose in Apple's font picker. That
+///    picker is the only way iPadOS lets an app use fonts installed from Settings > General >
+///    Fonts or from font apps. They are stored in Documents/Fonts (visible in Files).
 enum SystemFonts {
 
     static var folder: URL? {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
             .appendingPathComponent("SystemFonts", isDirectory: true)
     }
+
+    static var pickedFolder: URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Fonts", isDirectory: true)
+    }
+
+    // MARK: Fonts iPadOS lists
 
     /// Runs before the first window, so the fonts are in place when GridCraft scans for them.
     /// Stops after `budget` seconds; whatever is left is copied on the next launch.
@@ -21,7 +30,6 @@ enum SystemFonts {
         let started = Date()
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
-        // Every font name, from two sources: UIKit's list and CoreText's own list.
         var names: [String] = []
         var seen = Set<String>()
         for family in UIFont.familyNames {
@@ -34,8 +42,7 @@ enum SystemFonts {
         let fromCoreTextOnly = names.count - fromUIKit
 
         var wanted = Set<String>()
-        var exported = 0, cached = 0, skipped = 0, failed = 0, noLocation = 0
-        var samples: [String] = []
+        var exported = 0, cached = 0, skipped = 0, failed = 0
         var finished = true
 
         for postScript in names {
@@ -45,30 +52,18 @@ enum SystemFonts {
             }
             let ct = CTFontCreateWithName(postScript as CFString, 12, nil)
             // Apple's own folder is read directly by GridCraft.
-            if let url = CTFontCopyAttribute(ct, kCTFontURLAttribute) as? URL {
-                if url.path.hasPrefix("/System/Library/Fonts") {
-                    skipped += 1
-                    continue
-                }
-                if samples.count < 8 { samples.append("\(postScript) at \(url.deletingLastPathComponent().path)") }
-            } else {
-                noLocation += 1
-            }
-            let cg: CGFont = CTFontCopyGraphicsFont(ct, nil)
-            guard let tags = tableTags(of: cg) else {
-                failed += 1
+            if let url = CTFontCopyAttribute(ct, kCTFontURLAttribute) as? URL,
+               url.path.hasPrefix("/System/Library/Fonts") {
+                skipped += 1
                 continue
             }
-            let isCFF = tags.contains(0x43464620) || tags.contains(0x43464632)   // 'CFF ' or 'CFF2'
-            let safe = postScript.replacingOccurrences(of: "/", with: "_")
-            let fileName = safe + (isCFF ? ".otf" : ".ttf")
+            let fileName = fileName(for: postScript, font: ct)
+            guard let fileName = fileName else { failed += 1; continue }
             wanted.insert(fileName)
             let target = folder.appendingPathComponent(fileName)
             if FileManager.default.fileExists(atPath: target.path) {
                 cached += 1
-                continue
-            }
-            if let data = sfnt(from: cg, tags: tags, isCFF: isCFF), (try? data.write(to: target)) != nil {
+            } else if write(ct, to: target) {
                 exported += 1
             } else {
                 failed += 1
@@ -81,8 +76,52 @@ enum SystemFonts {
                 try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
             }
         }
-        gcLog("system fonts: names from UIKit \(fromUIKit), extra from CoreText \(fromCoreTextOnly); \(exported) copied, \(cached) already cached, \(skipped) in Apple's folder, \(noLocation) without a location, \(failed) failed, complete: \(finished)")
-        for s in samples { gcLog("system fonts sample: \(s)") }
+        gcLog("system fonts: names from UIKit \(fromUIKit), extra from CoreText \(fromCoreTextOnly); \(exported) copied, \(cached) already cached, \(skipped) in Apple's folder, \(failed) failed, complete: \(finished)")
+    }
+
+    // MARK: Fonts chosen in Apple's font picker
+
+    /// Copies the chosen font, and the other styles of its family, into Documents/Fonts.
+    /// Returns the font names that were stored.
+    static func addPicked(_ descriptor: UIFontDescriptor) -> [String] {
+        guard let folder = pickedFolder else { return [] }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        var descriptors: [CTFontDescriptor] = [descriptor as CTFontDescriptor]
+        if let family = descriptor.object(forKey: .family) as? String {
+            let query = CTFontDescriptorCreateWithAttributes([kCTFontFamilyNameAttribute: family] as CFDictionary)
+            if let all = CTFontDescriptorCreateMatchingFontDescriptors(query, nil) as? [CTFontDescriptor], !all.isEmpty {
+                descriptors = all
+            }
+        }
+
+        var stored: [String] = []
+        for d in descriptors {
+            let ct = CTFontCreateWithFontDescriptor(d, 12, nil)
+            let postScript = CTFontCopyPostScriptName(ct) as String
+            guard let fileName = fileName(for: postScript, font: ct) else { continue }
+            if write(ct, to: folder.appendingPathComponent(fileName)) { stored.append(postScript) }
+        }
+        gcLog("added fonts from the picker: \(stored)")
+        return stored
+    }
+
+    // MARK: Building font files
+
+    private static func fileName(for postScript: String, font: CTFont) -> String? {
+        let cg: CGFont = CTFontCopyGraphicsFont(font, nil)
+        guard let tags = tableTags(of: cg) else { return nil }
+        let isCFF = tags.contains(0x43464620) || tags.contains(0x43464632)   // 'CFF ' or 'CFF2'
+        let safe = postScript.replacingOccurrences(of: "/", with: "_")
+        return safe + (isCFF ? ".otf" : ".ttf")
+    }
+
+    private static func write(_ font: CTFont, to url: URL) -> Bool {
+        let cg: CGFont = CTFontCopyGraphicsFont(font, nil)
+        guard let tags = tableTags(of: cg) else { return false }
+        let isCFF = tags.contains(0x43464620) || tags.contains(0x43464632)
+        guard let data = sfnt(from: cg, tags: tags, isCFF: isCFF) else { return false }
+        return (try? data.write(to: url)) != nil
     }
 
     /// The table tags of a font (like "head", "glyf", "CFF "), sorted.
