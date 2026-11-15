@@ -475,16 +475,22 @@ impl Host {
             gpu.surface.configure(&gpu.device, &gpu.config);
             gpu.needs_reconfigure = false;
         }
-        let frame = match gpu.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) => Some(f),
-            wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
-                gpu.needs_reconfigure = true;
-                Some(f)
-            }
-            _ => {
-                gpu.surface.configure(&gpu.device, &gpu.config);
-                wake_at(&deadline, Instant::now());
-                None
+        let frame = if prims.is_empty() {
+            // The app skips painting for one frame while it switches fonts. Showing that empty
+            // frame would flash a blank screen, so the picture on screen is simply kept.
+            None
+        } else {
+            match gpu.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(f) => Some(f),
+                wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
+                    gpu.needs_reconfigure = true;
+                    Some(f)
+                }
+                _ => {
+                    gpu.surface.configure(&gpu.device, &gpu.config);
+                    wake_at(&deadline, Instant::now());
+                    None
+                }
             }
         };
 
