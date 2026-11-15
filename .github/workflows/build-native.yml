@@ -19,6 +19,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Collect the font dropdown code for debugging
+        continue-on-error: true
+        run: |
+          mkdir -p logs/font-dropdown-code
+          grep -rn "fonts::families\|families()" crates/ui-egui/src > logs/grep-families.txt || true
+          grep -rn "\"Calibri\"" crates/ui-egui/src > logs/grep-calibri.txt || true
+          for f in $(grep -rl "fonts::families\|families()" crates/ui-egui/src); do
+            cp "$f" "logs/font-dropdown-code/$(echo "$f" | tr '/' '_')"
+          done
+
       - name: Teach the app where the iPad keeps its fonts
         run: |
           mkdir -p logs
