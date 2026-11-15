@@ -15,12 +15,13 @@ func gcLog(_ message: String) {
     }
 }
 
-/// Owns the drawing view and everything that needs Apple's own screens: Files, alerts, printing.
+/// Owns the drawing view and everything that needs Apple's own screens: Files, alerts, printing,
+/// the font picker.
 ///
 /// Saving: Save As (and a workbook's first save) always shows Apple's Save to Files sheet. After
 /// that, the app's Save and AutoSave write a working copy in Documents/Working, and this class
 /// copies that file to the file the person chose, silently, about a second later.
-final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate {
+final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate, UIFontPickerViewControllerDelegate {
 
     private let metal = MetalView()
     private enum Mode { case open, save, picture }
@@ -82,10 +83,43 @@ final class GridCraftViewController: UIViewController, UIDocumentPickerDelegate 
         nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.metal.setFocused(true)
         }
+        nc.addObserver(forName: .gcAddFonts, object: nil, queue: .main) { [weak self] _ in
+            self?.showFontPicker()
+        }
 
         mirrorTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.mirrorWorkingCopies()
         }
+    }
+
+    // MARK: Fonts
+
+    /// Apple's own font picker: the only way an app can use fonts installed on the iPad.
+    private func showFontPicker() {
+        guard presentedViewController == nil, view.window?.isKeyWindow ?? true else { return }
+        var configuration = UIFontPickerViewController.Configuration()
+        configuration.includeFaces = false
+        let picker = UIFontPickerViewController(configuration: configuration)
+        picker.delegate = self
+        metal.suspendFocus = true
+        present(picker, animated: true)
+    }
+
+    func fontPickerViewControllerDidPickFont(_ viewController: UIFontPickerViewController) {
+        metal.suspendFocus = false
+        guard let descriptor = viewController.selectedFontDescriptor else { return }
+        let stored = SystemFonts.addPicked(descriptor)
+        if presentedViewController != nil { dismiss(animated: true) }
+        let family = (descriptor.object(forKey: .family) as? String) ?? "the font"
+        if stored.isEmpty {
+            message("Couldn’t add the font", "iPadOS did not let GridCraft copy “\(family)”. Some protected fonts can’t be used.")
+        } else {
+            message("Font added", "Added \(stored.count) style(s) of “\(family)”. Restart GridCraft once to use \(stored.count == 1 ? "it" : "them").")
+        }
+    }
+
+    func fontPickerViewControllerDidCancel(_ viewController: UIFontPickerViewController) {
+        metal.suspendFocus = false
     }
 
     // MARK: Opening files
