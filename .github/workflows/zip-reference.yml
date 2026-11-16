@@ -1,0 +1,25 @@
+name: Zip reference
+
+on:
+  workflow_dispatch:
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect the iPad port files
+        run: |
+          mkdir -p out
+          for d in $(find apps -maxdepth 1 -iname '*ios*'); do cp -r "$d" out/; done
+          cp -r ios out/ios
+          rm -rf out/ios/rust-lib
+          cp -r .github/workflows out/workflows
+          find out -type f | sort > out/FILES.txt
+          wc -l $(find out -type f -name '*.rs' -o -type f -name '*.swift' -o -type f -name '*.yml' -o -type f -name '*.h') | tail -30 > out/SIZES.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reference
+          path: out
